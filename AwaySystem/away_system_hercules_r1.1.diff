@@ -1,0 +1,339 @@
+ conf/messages.conf  | 16 ++++++++++++
+ src/common/mmo.h    |  7 +++++
+ src/map/atcommand.c | 75 +++++++++++++++++++++++++++++++++++++++++++++++++++++
+ src/map/clif.c      | 45 ++++++++++++++++++++++++++++++++
+ src/map/pc.c        | 49 ++++++++++++++++++++++++++++++++++
+ src/map/pc.h        |  6 +++++
+ 6 files changed, 198 insertions(+)
+
+diff --git a/conf/messages.conf b/conf/messages.conf
+index d9d4e94..13e6ce9 100644
+--- a/conf/messages.conf
++++ b/conf/messages.conf
+@@ -1534,5 +1534,21 @@
+ 1498: You can't add a party bound item to a character without party!
+ 1499: You can't add a guild bound item to a character without guild!
+ 
++// Away System [sbk_]
++1600: To use this command, you must enter a message of %i characters (use: @away/@away2 <message>)
++1601: You are not authorized to use this command.
++1602: You can not use this command in BattleGround.
++1603: You can not use this command in PvP.
++1604: You can not use this command in GvG.
++1605: Now you are no longer missing.
++1606: You can not use auto trader being absent.
++1607: You can not equip items being absent.
++1608: You can not unequip items being absent.
++1609: You can not use items being absent.
++1610: You can not talk to an npc being absent.
++1611: You can not drop items while absent.
++1612: You can not do that while absent use command @away to stay active.
++
++
+ //Custom translations
+ import: conf/import/msg_conf.txt
+diff --git a/src/common/mmo.h b/src/common/mmo.h
+index ff7c1da..c56f1ba 100644
+--- a/src/common/mmo.h
++++ b/src/common/mmo.h
+@@ -105,6 +105,9 @@
+ //Official Limit: 2.1b ( the var that stores the money doesn't go much higher than this by default )
+ #define MAX_BANK_ZENY 2100000000
+ 
++// Away System [sbk_]
++#define AFK_LENGTH 200
++
+ #define MAX_LEVEL 175
+ #define MAX_FAME 1000000000
+ #define MAX_CART 100
+@@ -473,6 +476,10 @@ struct mmo_charstatus {
+ 	unsigned char font;
+ 
+ 	uint32 uniqueitem_counter;
++	
++	// Away System [sbk_]
++	int afk, afk_last_view;
++	char afk_message[AFK_LENGTH];
+ };
+ 
+ typedef enum mail_status {
+diff --git a/src/map/atcommand.c b/src/map/atcommand.c
+index ef528c4..c6d6ac4 100644
+--- a/src/map/atcommand.c
++++ b/src/map/atcommand.c
+@@ -5464,6 +5464,12 @@ void getring(struct map_session_data* sd) {
+ 		clif->message(fd, msg_txt(549)); // "You should have a shop open in order to use @autotrade."
+ 		return false;
+ 	}
++
++	if( sd->status.afk )
++	{
++		clif->message(fd, msg_txt(1606)); // Away System
++		return false;
++	}
+ 	
+ 	sd->state.autotrade = 1;
+ 	if( battle_config.at_timeout ) {
+@@ -9372,6 +9378,73 @@ static inline void atcmd_channel_help(int fd, const char *command, bool can_crea
+ 	clif->message(fd,atcmd_output);
+ 	return true;
+ }
++
++/**
++ * [sbk_] Away System.
++ * @away <message>
++ *
++ * Put away your character and responds to the message if it is called on a chat.
++ **/
++ACMD(away)
++{
++	if( sd->status.afk )
++	{
++		pc->away_unset(sd);
++		clif->message(sd->fd, msg_txt(1605));
++		return true;
++	}
++	else if(!message || !*message )
++	{
++		sprintf(atcmd_output,msg_txt(1600),AFK_LENGTH);
++		clif->message(sd->fd, atcmd_output);
++	}
++	else if( !sd->bl.m )
++		clif->message(sd->fd, msg_txt(1601));
++	else if( map->list[sd->bl.m].flag.battleground  )
++			clif->message(sd->fd, msg_txt(1602));
++	else if( map->list[sd->bl.m].flag.pvp )
++		clif->message(sd->fd, msg_txt(1603));
++	else if( map->list[sd->bl.m].flag.gvg )
++		clif->message(sd->fd, msg_txt(1604));
++	else {
++		sprintf(atcmd_output,"%s",message);
++		pc->away_set(sd, atcmd_output, 0);
++		return true;
++	}
++	
++	return false;
++}
++
++/**
++ * [sbk_] Away System.
++ * @away2 <message>
++ *
++ * Put away your character in a message! Missing and responds if he is called on a chat and disconnects from the server.
++ **/
++ ACMD(away2)
++{
++	if(!message || !*message )
++	{
++		sprintf(atcmd_output,msg_txt(1600),AFK_LENGTH);
++		clif->message(sd->fd, atcmd_output);
++	}
++	else if( !sd->bl.m )
++		clif->message(sd->fd, msg_txt(1601));
++	else if( map->list[sd->bl.m].flag.battleground  )
++			clif->message(sd->fd, msg_txt(1602));
++	else if( map->list[sd->bl.m].flag.pvp )
++		clif->message(sd->fd, msg_txt(1603));
++	else if( map->list[sd->bl.m].flag.gvg )
++		clif->message(sd->fd, msg_txt(1604));
++	else {
++		sprintf(atcmd_output,"%s",message);
++		pc->away_set(sd, atcmd_output, 1);
++		return true;
++	}
++	
++	return false;
++}
++
+ /**
+  * Fills the reference of available commands in atcommand DBMap
+  **/
+@@ -9641,6 +9714,8 @@ void atcommand_basecommands(void) {
+ 		ACMD_DEF(searchstore),
+ 		ACMD_DEF(costume),
+ 		ACMD_DEF(skdebug),
++		ACMD_DEF(away),
++		ACMD_DEF(away2),
+ 	};
+ 	int i;
+ 	
+diff --git a/src/map/clif.c b/src/map/clif.c
+index b9cd4cb..fd346c6 100644
+--- a/src/map/clif.c
++++ b/src/map/clif.c
+@@ -10328,6 +10328,12 @@ void clif_hercules_chsys_quit(struct map_session_data *sd) {
+ /// There are various variants of this packet, some of them have padding between fields.
+ void clif_parse_ActionRequest(int fd, struct map_session_data *sd)
+ {
++	if( sd->status.afk )
++	{ // Away System
++		clif->message(sd->fd, msg_txt(1612));
++		return;
++	}
++
+ 	clif->pActionRequest_sub(sd,
+ 		RFIFOB(fd,packet_db[RFIFOW(fd,0)].pos[1]),
+ 		RFIFOL(fd,packet_db[RFIFOW(fd,0)].pos[0]),
+@@ -10497,6 +10503,15 @@ void clif_parse_WisMessage(int fd, struct map_session_data* sd)
+ 		return;
+ 	}
+ 
++	// If the player is in AFK mode
++	if( dstsd->status.afk )
++	{
++		char output[AFK_LENGTH];
++		sprintf(output, "%s", dstsd->status.afk_message);
++		clif->wis_message(sd->fd, dstsd->status.name, output, strlen(output) + 1);
++		if( dstsd->state.autotrade == 1 ) return; // Returns if in auto-trader to be no more messages.
++	}
++	
+ 	// if player is autotrading
+ 	if( dstsd->state.autotrade ) {
+ 		char output[256];
+@@ -10591,6 +10606,12 @@ void clif_parse_DropItem(int fd, struct map_session_data *sd)
+ 	int item_index = RFIFOW(fd,packet_db[RFIFOW(fd,0)].pos[0])-2;
+ 	int item_amount = RFIFOW(fd,packet_db[RFIFOW(fd,0)].pos[1]);
+ 
++	if( sd->status.afk )
++	{ // Away System
++		clif->message(sd->fd, msg_txt(1611));
++		return;
++	}
++
+ 	for(;;) {
+ 		if (pc_isdead(sd))
+ 			break;
+@@ -10627,6 +10648,12 @@ void clif_parse_UseItem(int fd, struct map_session_data *sd)
+ {
+ 	int n;
+ 
++	if( sd->status.afk )
++	{ // Away System
++		clif->message(sd->fd, msg_txt(1609));
++		return;
++	}
++
+ 	if (pc_isdead(sd)) {
+ 		clif->clearunit_area(&sd->bl, CLR_DEAD);
+ 		return;
+@@ -10653,6 +10680,12 @@ void clif_parse_UseItem(int fd, struct map_session_data *sd)
+ void clif_parse_EquipItem(int fd,struct map_session_data *sd) {
+ 	struct packet_equip_item *p = P2PTR(fd);
+ 
++	if( sd->status.afk )
++	{ // Away System
++		clif->message(sd->fd, msg_txt(1607));
++		return;
++	}
++
+ 	if(pc_isdead(sd)) {
+ 		clif->clearunit_area(&sd->bl,CLR_DEAD);
+ 		return;
+@@ -10788,6 +10821,12 @@ void clif_parse_UnequipItem(int fd,struct map_session_data *sd)
+ {
+ 	int index;
+ 
++	if( sd->status.afk )
++	{ // Away System
++		clif->message(sd->fd, msg_txt(1608));
++		return;
++	}
++
+ 	if(pc_isdead(sd)) {
+ 		clif->clearunit_area(&sd->bl,CLR_DEAD);
+ 		return;
+@@ -10818,6 +10857,12 @@ void clif_parse_NpcClicked(int fd,struct map_session_data *sd)
+ {
+ 	struct block_list *bl;
+ 
++	if( sd->status.afk )
++	{ // Away System
++		clif->message(sd->fd, msg_txt(1610));
++		return;
++	}
++
+ 	if( pc_isdead(sd) ) {
+ 		clif_clearunit_area(&sd->bl,CLR_DEAD);
+ 		return;
+diff --git a/src/map/pc.c b/src/map/pc.c
+index f07858c..aac5260 100644
+--- a/src/map/pc.c
++++ b/src/map/pc.c
+@@ -10803,6 +10803,49 @@ void pc_autotrade_populate(struct map_session_data *sd) {
+ 	
+ 	idb_remove(pc->at_db, sd->status.char_id);
+ }
++
++/**
++ * Away System [_sbk]
++ *  Define o jogador como ausente e ao enviarem uma mensagem privada ele responde com a mensagem do jogador.
++ **/
++int pc_away_set(struct map_session_data *sd, const char* msg, int mode)
++{
++	sd->status.afk = 1;
++	sd->status.afk_last_view = (sd->status.head_top?sd->status.head_top:0);
++	sd->state.blockedmove = 1;
++	sprintf(sd->status.afk_message,"%s",msg);
++	pc_setsit(sd);
++	skill->sit(sd,1);
++	clif->sitting(&sd->bl);
++	clif->changelook(&sd->bl,LOOK_HEAD_TOP,471);
++	clif->specialeffect(&sd->bl, 234, AREA);
++	
++	if( mode )
++	{
++		sd->state.autotrade = 1;
++		sd->state.monster_ignore = 1;
++		clif->authfail_fd(sd->fd, 15);
++	}
++	
++	return true;
++}
++
++/**
++ * Away System [_sbk]
++ * Define o jogador em atividade.
++ **/
++int pc_away_unset(struct map_session_data *sd)
++{
++	clif->changelook(&sd->bl,LOOK_HEAD_TOP,sd->status.afk_last_view);
++	clif->specialeffect(&sd->bl, 234, AREA);
++	sd->status.afk = 0;
++	sd->state.monster_ignore = 0;
++	sd->status.afk_last_view = 0;
++	sd->state.blockedmove = 0;
++	sprintf(sd->status.afk_message,"%s","");
++	return true;
++}
++
+ void do_final_pc(void) {
+ 	
+ 	db_destroy(pc->itemcd_db);
+@@ -11165,4 +11208,10 @@ void pc_defaults(void) {
+ 	pc->autotrade_start = pc_autotrade_start;
+ 	pc->autotrade_prepare = pc_autotrade_prepare;
+ 	pc->autotrade_populate = pc_autotrade_populate;
++	
++	/**
++	 * Away System [sbk_]
++	 **/
++	pc->away_set = pc_away_set;
++	pc->away_unset = pc_away_unset;
+ }
+diff --git a/src/map/pc.h b/src/map/pc.h
+index 5809086..7135163 100644
+--- a/src/map/pc.h
++++ b/src/map/pc.h
+@@ -1027,6 +1027,12 @@ struct pc_interface {
+ 	void (*autotrade_start) (struct map_session_data *sd);
+ 	void (*autotrade_prepare) (struct map_session_data *sd);
+ 	void (*autotrade_populate) (struct map_session_data *sd);
++	
++	/**
++	 * Away Sistem [sbk_]
++	 **/
++	 int (*away_set) (struct map_session_data *sd, const char* msg, int mode);
++	 int (*away_unset) (struct map_session_data *sd);
+ };
+ 
+ struct pc_interface *pc;
